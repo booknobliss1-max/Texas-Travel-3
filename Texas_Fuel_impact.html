@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Oil Supply & Shipping Monitoring Dashboard (Prototype)</title>
+<link href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" rel="stylesheet"/>
+<style>
+  body { font-family: Inter, system-ui, -apple-system, sans-serif; margin:0; display:flex; height:100vh; }
+  #sidebar { width:360px; border-right:1px solid #e6e6e6; padding:12px; box-sizing:border-box; overflow:auto; }
+  #main { flex:1; display:flex; flex-direction:column; }
+  #map { height:60%; min-height:300px; }
+  #charts { height:40%; display:flex; gap:12px; padding:12px; box-sizing:border-box; overflow:auto; }
+  .card { background:white; padding:10px; border-radius:6px; box-shadow:0 1px 4px rgba(0,0,0,0.06); }
+  h2 { margin:8px 0; font-size:16px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td, th { padding:6px 8px; border-bottom:1px solid #f2f2f2; text-align:left; }
+  .badge { display:inline-block; padding:4px 8px; border-radius:999px; font-size:12px; }
+  .severity-high { background:#ffebee; color:#c62828; }
+  .severity-med { background:#fff8e1; color:#ff9800; }
+  .severity-low { background:#e8f5e9; color:#2e7d32; }
+  @media (max-width:800px) {
+    body { flex-direction:column; }
+    #sidebar { width:100%; height:240px; border-right:0; border-bottom:1px solid #e6e6e6; }
+    #map { height:50vh; }
+  }
+</style>
+</head>
+<body>
+  <div id="sidebar">
+    <h1 style="margin:0;font-size:18px">Supply & Shipping Monitor (Prototype)</h1>
+    <p style="margin:6px 0 12px;color:#555">Monitoring: Oil disruptions, refinery outages, shipping lanes, geopolitical events</p>
+
+    <div class="card" style="margin-bottom:12px">
+      <h2>Active Alerts</h2>
+      <div id="alerts">
+        <!-- populated by script -->
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:12px">
+      <h2>Recent Events</h2>
+      <table id="events-table">
+        <thead><tr><th>Time</th><th>Type</th><th>Summary</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Controls</h2>
+      <label><input type="checkbox" id="toggle-vessels" checked/> Show vessels</label><br/>
+      <label><input type="checkbox" id="toggle-refineries" checked/> Show refineries</label><br/>
+      <label><input type="checkbox" id="toggle-incidents" checked/> Show incidents</label>
+    </div>
+  </div>
+
+  <div id="main">
+    <div id="map" class="card"></div>
+
+    <div id="charts">
+      <div class="card" style="flex:1">
+        <h2>Crude Inventories (Simulated)</h2>
+        <canvas id="inv-chart" width="400" height="160"></canvas>
+      </div>
+      <div class="card" style="width:360px">
+        <h2>Refinery Utilization</h2>
+        <div id="ref-info">No data — backend required for live values.</div>
+      </div>
+    </div>
+  </div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+  // Simulated data for prototype
+  const events = [
+    {time:'2026-03-12T08:10:00Z', type:'refinery_outage', summary:'Refinery A: unexpected outage (unit 2)', lat:29.7, lon:-95.0, severity:'high'},
+    {time:'2026-03-12T09:05:00Z', type:'shipping_incident', summary:'Vessel grounding near Strait of Hormuz', lat:26.5, lon:56.2, severity:'high'},
+    {time:'2026-03-12T10:20:00Z', type:'geopolitical', summary:'Sanctions announced on region X', lat:50.1, lon:14.4, severity:'med'},
+    {time:'2026-03-12T11:00:00Z', type:'inventory', summary:'Weekly crude draw in US Gulf', lat:29.9, lon:-90.0, severity:'low'}
+  ];
+
+  const vessels = [
+    {mmsi:111000111, name:'Tanker Alpha', lat:25.2, lon:55.3},
+    {mmsi:222000222, name:'Bulk Beta', lat:24.6, lon:54.8},
+    {mmsi:333000333, name:'Tanker Gamma', lat:29.0, lon:-90.5}
+  ];
+
+  const refineries = [
+    {name:'Refinery A', lat:29.7, lon:-95.0},
+    {name:'Refinery B', lat:34.9, lon:-120.3}
+  ];
+
+  // Populate events table and alerts
+  const tbody = document.querySelector('#events-table tbody');
+  const alertsDiv = document.getElementById('alerts');
+  events.forEach(e=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML = `<td>${new Date(e.time).toLocaleString()}</td><td>${e.type}</td><td>${e.summary}</td>`;
+    tbody.appendChild(tr);
+
+    if(e.severity==='high') {
+      const d = document.createElement('div');
+      d.className = 'badge severity-high';
+      d.style.margin='6px 0';
+      d.textContent = `HIGH: ${e.summary}`;
+      alertsDiv.appendChild(d);
+    } else if(e.severity==='med') {
+      const d = document.createElement('div');
+      d.className = 'badge severity-med';
+      d.style.margin='6px 0';
+      d.textContent = `MED: ${e.summary}`;
+      alertsDiv.appendChild(d);
+    }
+  });
+
+  // Map
+  const map = L.map('map').setView([20, 0], 2);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18}).addTo(map);
+
+  const vesselLayer = L.layerGroup().addTo(map);
+  const refineryLayer = L.layerGroup().addTo(map);
+  const incidentLayer = L.layerGroup().addTo(map);
+
+  function drawMarkers(){
+    vesselLayer.clearLayers();
+    vessels.forEach(v=>{
+      const marker = L.circleMarker([v.lat,v.lon], {radius:6, color:'#1976d2', fillOpacity:0.9});
+      marker.bindPopup(`<b>${v.name}</b><br/>MMSI: ${v.mmsi}`);
+      marker.addTo(vesselLayer);
+    });
+
+    refineryLayer.clearLayers();
+    refineries.forEach(r=>{
+      const marker = L.marker([r.lat,r.lon], {title:r.name});
+      marker.bindPopup(`<b>${r.name}</b>`);
+      marker.addTo(refineryLayer);
+    });
+
+    incidentLayer.clearLayers();
+    events.filter(e=>e.type==='shipping_incident' || e.type==='refinery_outage' || e.type==='geopolitical').forEach(e=>{
+      const color = e.severity==='high' ? '#c62828' : e.severity==='med' ? '#ff9800' : '#2e7d32';
+      const marker = L.circle([e.lat,e.lon], {radius:25000, color:color, fillOpacity:0.12});
+      marker.bindPopup(`<b>${e.type}</b><br/>${e.summary}<br/>${new Date(e.time).toLocaleString()}`);
+      marker.addTo(incidentLayer);
+    });
+  }
+  drawMarkers();
+
+  // toggles
+  document.getElementById('toggle-vessels').addEventListener('change', (ev)=> {
+    if(ev.target.checked) vesselLayer.addTo(map); else map.removeLayer(vesselLayer);
+  });
+  document.getElementById('toggle-refineries').addEventListener('change', (ev)=> {
+    if(ev.target.checked) refineryLayer.addTo(map); else map.removeLayer(refineryLayer);
+  });
+  document.getElementById('toggle-incidents').addEventListener('change', (ev)=> {
+    if(ev.target.checked) incidentLayer.addTo(map); else map.removeLayer(incidentLayer);
+  });
+
+  // Simple inventory chart (simulated)
+  const ctx = document.getElementById('inv-chart').getContext('2d');
+  const invChart = new Chart(ctx, {
+    type:'line',
+    data:{
+      labels: ['-11','-10','-9','-8','-7','-6','-5','-4','-3','-2','-1','now'],
+      datasets:[{
+        label:'US Crude Inventories (MMbbl)',
+        data: [430,428,427,425,422,420,419,417,416,414,413,410],
+        borderColor:'#1976d2', backgroundColor:'rgba(25,118,210,0.08)', tension:0.2
+      }]
+    },
+    options:{responsive:true, plugins:{legend:{display:false}}}
+  });
+
+  // Note: This is a frontend prototype. To make this live:
+  //  - implement backend ingestion, normalize data into an API
+  //  - replace simulated arrays with fetch(...) calls to the backend
+  //  - add authentication and secure API keys for paid services
+</script>
+</body>
+</html>
